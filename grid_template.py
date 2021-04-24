@@ -10,10 +10,10 @@ import decimal
 from datetime import datetime
 
 # Api and secret
-api_key = ""  
-api_secret = ""
-subaccount = ""
-account_name = ""  # Set your account name (ตั้งชื่อ Account ที่ต้องการให้แสดงผล)
+api_key = "0KMY8AvxpS5TPV0nJ38il9L5JUM43a2OAfE78MRL"  
+api_secret = "ius0Fe7t5bXUdPRQ2VyTGqg_AmOO0mmz5RWN7Eog"
+subaccount = "test3"
+account_name = "GRID_TEST"  # Set your account name (ตั้งชื่อ Account ที่ต้องการให้แสดงผล)
 
 
 
@@ -27,10 +27,26 @@ exchange.headers = {'FTX-SUBACCOUNT': subaccount,}
 post_only = True  # Maker or Taker (วางโพซิชั่นเป็น MAKER เท่านั้นหรือไม่ True = ใช่)
 
 # Global Varibale Setting
-min_reb_size = 5  # Minimum Rebalance Size ($)
-token_name_lst =["XRP", "XRPBEAR"]  # Name of Rebalancing Token (ใส่ชื่อเหรียญที่ต้องการ Rebalance)
-pair_lst = ["XRP/USD", "XRPBEAR/USD"]  # Rebalancing Pair (ใส่ชื่อคู่ที่ต้องการ Rebalance เช่น XRP จะเป็น XRP/USD)
-fix_value_lst = [30, 40]  # Rebalancing Ratio (ใส่สัดส่วนที่ต้องการ Rebalance หน่วยเป็น $)
+min_trade_size = 2  # Minimum Rebalance Size ($)
+token_name_lst =["XRP"]  # Name of Rebalancing Token (ใส่ชื่อเหรียญที่ต้องการ Rebalance)
+pair_lst = ["XRP/USD"]  # Rebalancing Pair (ใส่ชื่อคู่ที่ต้องการ Rebalance เช่น XRP จะเป็น XRP/USD)
+fix_value_lst = [0]  # Rebalancing Ratio (ใส่สัดส่วนที่ต้องการ Rebalance หน่วยเป็น $)
+
+# Fix Value Setting
+capital = 100
+step = 0.011
+upzone = 1.875
+lowzone = 0.875
+
+# Equation calculation
+zone_range = round(upzone - (lowzone), 10)
+trade_slot = int(zone_range / step)  # all trade slot (จำนวนไม้)
+base_size = ((capital / upzone) / trade_slot)
+x_point = [upzone, lowzone]
+y_point = [base_size, (trade_slot * base_size)]
+
+a = (y_point[1] - y_point[0]) / (x_point[1] - x_point[0])
+b = y_point[1] - (a * (x_point[1]))
 
 # file system
 tradelog_file = "{}_tradinglog.csv".format(subaccount)
@@ -127,6 +143,84 @@ def get_cash():
             cash = float(t['availableWithoutBorrow'] )
     return cash
 
+def buy_execute():
+    pending_buy = get_pending_buy()
+    if pending_buy == []:
+        print('Buying {} Size = {}'.format(asset_name, buy_size))
+        create_buy_order()
+        time.sleep(2)
+        pending_buy = get_pending_buy()
+
+        if pending_buy != []:
+            print('Waiting For Order To be filled')
+            pending_buy_id = get_pending_buy()[0]['id']
+            print('Buy Order Created Success, Order ID: {}'.format(pending_buy_id))
+            print('Waiting For Buy Order To be Filled')
+            time.sleep(10)
+            pending_buy = get_pending_buy()
+
+        if pending_buy == []:
+            print("Buy order Matched")
+            print("Updateing Trade Log")
+            update_trade_log(pair)
+        else:
+            print('Buy Order is not match, Resending...')
+            pending_buy_id = get_pending_buy()[0]['id']
+            order_id = pending_buy_id
+            cancel_order()  
+    else:
+        pending_buy_id = get_pending_buy()[0]['id']
+        print("Pending BUY Order Found")
+        print("Canceling pending Order")
+        order_id = pending_buy_id
+        cancel_order()
+        pending_buy = get_pending_buy()
+
+        if pending_buy == []:
+            print('Buy Order Matched or Cancelled')
+        else:
+            print('Buy Order is not Matched or Cancelled, Retrying')
+    print("------------------------------")
+
+def sell_execute():
+    pending_sell = get_pending_sell()
+
+    if pending_sell == []:
+        print('Selling {} Size = {}'.format(asset_name, sell_size))
+        create_sell_order()
+        time.sleep(2)
+        pending_sell = get_pending_sell()
+        if pending_sell != []:
+            pending_sell_id = get_pending_sell()[0]['id']
+            print('Sell Order Created Success, Order ID: {}'.format(pending_sell_id))
+            print('Waiting For Sell Order To be filled')
+            time.sleep(10)
+            pending_sell = get_pending_sell()
+
+        if pending_sell == []:
+            print("Sell order Matched")
+            update_trade_log(pair)
+        else:
+            print('Sell Order is not match, Resending...')
+            pending_sell_id = get_pending_sell()[0]['id']
+            order_id = pending_sell_id
+            cancel_order()
+
+    else:
+        pending_sell_id = get_pending_sell()[0]['id']
+        print("Pending Order Found")
+        print("Canceling pending Order")
+        order_id = pending_sell_id
+        cancel_order()
+        time.sleep(1)
+        pending_sell = get_pending_sell()
+
+        if pending_sell == []:
+            print('Sell Order Matched or Cancelled')
+        else:
+            print('Sell Order is not Matched or Cancelled, Retrying')
+    print("------------------------------")
+
 # Database Function Part
 
 def checkDB():
@@ -185,7 +279,7 @@ def update_trade_log(pair):
             print('Trade Already record')
 
 
-# Status Report
+# Main Loop
 while True:
     try:    
         wallet = get_wallet_details()
@@ -240,53 +334,29 @@ while True:
                     min_trade_value = get_min_trade_value()
                     cash = get_cash()
                     pending_buy = get_pending_buy()
+                    fix_asset_control = (a * price) + b
 
                     # Create BUY params
-                    initial_diff = token_fix_value[asset_name]
-                    buy_size = initial_diff / price
+                    buy_size = fix_asset_control
                     buy_price = bid_price - step_price
-
-                    if cash > min_trade_value and buy_size > min_size:
-                        if pending_buy == []:
-                            print('Buying {} Size = {}'.format(asset_name, buy_size))
-                            create_buy_order()
-                            time.sleep(2)
-                            if pending_buy != []:
-                                print('Waiting For Order To be filled')
-                                print('Buy Order Created Success, Order ID: {}'.format(pending_buy_id))
-                                print('Waiting For Buy Order To be Filled')
-                                time.sleep(10)
-
-                            if pending_buy == []:
-                                print("Buy order Matched")
-                                print("Updateing Trade Log")
-                                update_trade_log(pair)
-                            else:
-                                print('Buy Order is not match, Resending...')
-                                pending_buy_id = get_pending_buy()[0]['id']
-                                order_id = pending_buy_id
-                                cancel_order()  
-
+                    if price < upzone and price > lowzone:
+                        if cash > min_trade_value and buy_size > min_size:
+                            buy_execute()
                         else:
-                            pending_buy_id = get_pending_buy()[0]['id']
-                            print("Pending BUY Order Found")
-                            print("Canceling pending Order")
-                            order_id = pending_buy_id
-                            cancel_order()
-                            if pending_buy == []:
-                                print('Buy Order Matched or Cancelled')
-                            else:
-                                print('Buy Order is not Matched or Cancelled, Retrying')
-                        print("------------------------------")
-                    else:
-                        print("Not Enough Balance to buy {}".format(asset_name))
-                        print('Your Cash is {} // Minimum Trade Value is {}'.format(cash, min_trade_value))
+                            print("Not Enough Balance to buy {}".format(asset_name))
+                            print('Your Cash is {} // Minimum Trade Value is {}'.format(cash, min_trade_value))
+                    elif price > upzone:
+                        print("Out of trading zone")
+                        print("Price more than {}".format(str(upzone)))
+                    else :
+                        print("Out of trading zone")
+                        print("Price lower than {}".format(str(lowzone)))
                 else:
                     print('{} is Already in Wallet'.format(asset_name))
                     print("------------------------------")
                     time.sleep(1)      
         
-        # Rebalancing Loop
+        # Trading Loop
         for t in time_sequence:
             cash = get_cash()
             Time = get_time()
@@ -297,7 +367,7 @@ while True:
             
 
             if cash > 1 and len(wallet) == len(token_name_lst) + 1:
-                print('Entering Rebalance Loop')
+                print('Entering Trading Loop')
                 print("------------------------------")
                 wallet = get_wallet_details()
 
@@ -305,131 +375,105 @@ while True:
                     asset_name = item['coin']
                     
                     if asset_name != 'USD':
-                    
-                        asset_value = round(float(item['usdValue']),2)
-                        fixed_value = token_fix_value[asset_name]
-                        diff = abs(fixed_value - asset_value)
-                        asset_amt = float(item['total'])
+                        
                         pair = pair_dict[asset_name]
                         price = get_price()
-                    
+                        asset_value = round(float(item['usdValue']),2)
+                        asset_amount = float((item['availableWithoutBorrow']))
+                        min_size = get_minimum_size()
+                        fix_asset_control = (a * price) + b
+
+                        while price > upzone:
+                            if asset_amount > min_size:
+                                sell_size = asset_amount
+                                sell_execute()
+                                price = get_price()
+                                time.sleep(5)
+                            else:
+                                print("Out of trading zone")
+                                print("Price more than {}".format(str(upzone)))
+                                price = get_price()
+                                time.sleep(5)
+                        
+                        while price < lowzone:
+                            print("Out of trading zone")
+                            print("Price lower than {}".format(str(lowzone)))
+                            price = get_price()
+                            time.sleep(5)
+
                         if asset_name in token_fix_value.keys():
                             # check coin price and value
                             print('{} Price is {}'.format(asset_name, price))
                             print('{} Value is {}'.format(asset_name, asset_value))
+                            print('{} Amount is {}'.format(asset_name, asset_amount))
+                            print('Fix Asset Control is {}'.format(fix_asset_control))
+                            print('Base Trading Size is {}'.format(base_size))
                             
-                            # Check rebalance BUY trigger
-                            if asset_value < fixed_value - min_reb_size:
-                                print("Current {} Value less than fix value : Rebalancing -- Buy".format(asset_name))
+                            # Check trading BUY trigger
+                            if asset_amount <= fix_asset_control - base_size:
+                                print("Current {} asset less than fix asset : Trading -- Buy".format(asset_name))
                                         
                                 # Create trading params
+                                price = get_price()
                                 bid_price = get_bid_price()
                                 min_size = get_minimum_size()
                                 step_price = get_step_price()
                                 min_trade_value = get_min_trade_value()
                                 cash = get_cash()
                                 pending_buy = get_pending_buy()
+
+                                # Trading Diff Control
+                                fix_asset_control = (a * price) + b
+                                diff = abs(fix_asset_control - asset_amount)
                                 
                                 # Create BUY params
-                                buy_size = diff / price
+                                buy_size = diff
                                 buy_price = bid_price - step_price
-
 
                                 # BUY order execution
                                 if cash > min_trade_value and buy_size > min_size:
-                                    if pending_buy == []:
-                                        print('Buying {} Size = {}'.format(asset_name, buy_size))
-                                        create_buy_order()
-                                        time.sleep(2)
-                                        if pending_buy != []:
-                                            pending_buy_id = get_pending_buy()[0]['id']
-                                            print('Buy Order Created Success, Order ID: {}'.format(pending_buy_id))
-                                            print('Waiting For Buy Order To be Filled')
-                                            time.sleep(10)
-
-                                        if pending_buy == []:
-                                            print("Buy order Matched")
-                                            update_trade_log(pair)
-                                        else:
-                                            print('Buy Order is not match, Resending...')
-                                            pending_buy_id = get_pending_buy()[0]['id']
-                                            order_id = pending_buy_id
-                                            cancel_order()
-                                    else:
-                                        pending_buy_id = get_pending_buy()[0]['id']
-                                        print("Pending Buy Order Found")
-                                        print("Canceling pending Order")
-                                        order_id = pending_buy_id
-                                        cancel_order()
-                                        if pending_buy == []:
-                                            print('Buy Order Matched or Cancelled')
-                                        else:
-                                            print('Buy Order is not Matched or Cancelled, Retrying')
-                                    print("------------------------------")
+                                    buy_execute()
                                 else:
                                     print("Not Enough Balance to buy {}".format(asset_name))
                                     print('Your Cash is {} // Minimum Trade Value is {}'.format(cash, min_trade_value))
                                     
-                            # Check rebalance SELL trigger        
-                            elif asset_value > fixed_value + min_reb_size:
-                                print("Current {} Value more than fix value : Rebalancing -- Sell".format(asset_name))
+                            # Check trading SELL trigger        
+                            elif asset_amount >= fix_asset_control + base_size:
+                                print("Current {} Amount more than fix amount : Trading -- Sell".format(asset_name))
                                 
                                 # Create trading params
+                                price = get_price()
                                 bid_price = get_bid_price()
                                 min_size = get_minimum_size()
                                 step_price = get_step_price()
                                 min_trade_value = get_min_trade_value()
                                 pending_sell = get_pending_sell()
+
+                                # Trading Diff Control
+                                fix_asset_control = (a * price) + b
+                                diff = abs(fix_asset_control - asset_amount)
                                         
                                 # Create SELL params
-                                sell_size = diff / price
+                                sell_size = diff
                                 sell_price = bid_price + (3 * step_price)
                                 
                                 # SELL order execution
                                 if diff > min_trade_value and sell_size > min_size:
-                                    if pending_sell == []:
-                                        print('Selling {} Size = {}'.format(asset_name, sell_size))
-                                        create_sell_order()
-                                        time.sleep(2)
-                                        if pending_sell != []:
-                                            pending_sell_id = get_pending_sell()[0]['id']
-                                            print('Sell Order Created Success, Order ID: {}'.format(pending_sell_id))
-                                            print('Waiting For Sell Order To be filled')
-                                            time.sleep(10)
-
-                                        if pending_sell == []:
-                                            print("Sell order Matched")
-                                            update_trade_log(pair)
-                                        else:
-                                            print('Sell Order is not match, Resending...')
-                                            pending_sell_id = get_pending_sell()[0]['id']
-                                            order_id = pending_sell_id
-                                            cancel_order()
-
-                                    else:
-                                        pending_sell_id = get_pending_sell()[0]['id']
-                                        print("Pending Order Found")
-                                        print("Canceling pending Order")
-                                        order_id = pending_sell_id
-                                        cancel_order()
-                                        if pending_sell == []:
-                                            print('Sell Order Matched or Cancelled')
-                                        else:
-                                            print('Sell Order is not Matched or Cancelled, Retrying')
-                                    print("------------------------------")
+                                    sell_execute()
                                 else:
                                     print("Not Enough Balance to sell {}".format(asset_name))
-                                    print('You have {} {} // Minimum Trade Value is {}'.format(asset_name, asset_value, min_trade_value))
+                                    print('You are selling {} {} BUT Minimum Trade amount is {}'.format(sell_size, asset_name, min_size))
+                                    time.sleep(5)
                                 
                             else:
-                                print("Current {} Value is not reach fix value yet : Waiting".format(asset_name))
+                                print("Current {} amount is not reach fix Asset Trigger yet : Waiting".format(asset_name))
                                 print("------------------------------")
                                 time.sleep(5)
         
         # Rebalancing Time Sequence
             print('Current Time Sequence is : {}'.format(t))
-            time.sleep(t*60)
+            time.sleep(t)
 
     except Exception as e:
         print('Error : {}'.format(str(e)))
-        time.sleep(10)                    
+        time.sleep(10)  
